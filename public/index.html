@@ -68,9 +68,9 @@ resize(); addEventListener('resize', resize);
 const COLORS = ['#5eead4','#ff5d6c','#facc15','#818cf8','#fb923c','#4ade80','#f472b6','#38bdf8'];
 const ARENA = {w: 2000, h: 1400};
 const POWERUP_TYPES = {
-  heal:   {color:'#4ade80'},
-  speed:  {color:'#facc15'},
-  damage: {color:'#f472b6'}
+  heal:   {color:'#4ade80', icon:'➕'},
+  speed:  {color:'#facc15', icon:'👟'},
+  damage: {color:'#f472b6', icon:'🗡️'}
 };
 const STREAK_NAMES = {2:'PODWÓJNE ZABÓJSTWO', 3:'POTRÓJNE ZABÓJSTWO', 4:'DOMINACJA', 5:'RAMPAGE!'};
 const SHOOT_COOLDOWN = 260, BULLET_SPEED = 640, BULLET_LIFE = 1400, PLAYER_R = 16, BULLET_R = 4, SPEED = 260;
@@ -81,6 +81,14 @@ let ws = null, pending = null;
 bullets = []; // {x,y,vx,vy,ownerId,ownerColor,ownerName,born,dmg}
 
 function rand(a,b){return a+Math.random()*(b-a);}
+function segmentHitsCircle(x1,y1,x2,y2,cx,cy,r){
+  const dx=x2-x1, dy=y2-y1;
+  const lenSq = dx*dx+dy*dy;
+  let t = lenSq>0 ? ((cx-x1)*dx+(cy-y1)*dy)/lenSq : 0;
+  t = Math.max(0, Math.min(1, t));
+  const px = x1+t*dx, py = y1+t*dy;
+  return Math.hypot(px-cx, py-cy) <= r;
+}
 function myId(){return me ? me.id : null;}
 function spawnPos(){return {x: rand(80, ARENA.w-80), y: rand(80, ARENA.h-80)};}
 
@@ -162,8 +170,8 @@ function renderEffects(){
   if(!el || !me) return;
   const now = performance.now();
   let html = '';
-  if(me.speedUntil > now) html += '<div class="box" style="background:var(--panel);padding:6px 10px;border-radius:8px;font-size:12px">⚡ Speed</div>';
-  if(me.dmgUntil > now) html += '<div class="box" style="background:var(--panel);padding:6px 10px;border-radius:8px;font-size:12px">💥 Damage</div>';
+  if(me.speedUntil > now) html += '<div class="box" style="background:var(--panel);padding:6px 10px;border-radius:8px;font-size:12px">👟 Speed</div>';
+  if(me.dmgUntil > now) html += '<div class="box" style="background:var(--panel);padding:6px 10px;border-radius:8px;font-size:12px">🗡️ Damage</div>';
   el.innerHTML = html;
 }
 function applyPowerup(type){
@@ -253,10 +261,10 @@ function loop(t){
 
   bullets = bullets.filter(b => t - b.born < BULLET_LIFE);
   for(const b of bullets){
+    const px = b.x, py = b.y;
     b.x += b.vx*dt; b.y += b.vy*dt;
     if(me && me.hp>0 && b.ownerId!==me.id){
-      const d = Math.hypot(b.x-me.x, b.y-me.y);
-      if(d < PLAYER_R+BULLET_R){
+      if(segmentHitsCircle(px, py, b.x, b.y, me.x, me.y, PLAYER_R+BULLET_R)){
         b.born = -99999;
         me.hp = Math.max(0, me.hp-(b.dmg||20));
         flashScreen('#ff5d6c33');
@@ -319,13 +327,17 @@ function render(){
   for(const id in activePowerups){
     const p = activePowerups[id];
     const meta = POWERUP_TYPES[p.type] || POWERUP_TYPES.heal;
+    const bob = Math.sin(performance.now()/300 + p.x) * 3;
     ctx.save();
-    ctx.translate(p.x,p.y);
-    ctx.rotate(performance.now()/500);
-    ctx.fillStyle = meta.color;
+    ctx.translate(p.x, p.y + bob);
     ctx.beginPath();
-    ctx.moveTo(0,-14); ctx.lineTo(14,0); ctx.lineTo(0,14); ctx.lineTo(-14,0); ctx.closePath();
+    ctx.arc(0,0,17,0,7);
+    ctx.fillStyle = meta.color + 'cc';
     ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = '#fff8'; ctx.stroke();
+    ctx.font = '20px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(meta.icon, 0, 1);
     ctx.restore();
   }
 
