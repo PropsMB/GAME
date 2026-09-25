@@ -11,6 +11,15 @@ const wss = new WebSocketServer({ server });
 
 const ARENA = { w: 2000, h: 1400 };
 const POWERUP_TYPES = ['heal', 'speed', 'damage'];
+const OBSTACLES = [
+  { x: 300, y: 300, w: 170, h: 60 }, { x: 900, y: 160, w: 60, h: 220 }, { x: 1550, y: 380, w: 150, h: 150 },
+  { x: 560, y: 780, w: 230, h: 60 }, { x: 1220, y: 880, w: 60, h: 230 }, { x: 1720, y: 980, w: 160, h: 110 },
+  { x: 100, y: 1080, w: 150, h: 150 }, { x: 980, y: 600, w: 110, h: 110 }, { x: 1400, y: 150, w: 150, h: 60 },
+  { x: 200, y: 650, w: 60, h: 180 }
+];
+function overlapsObstacle(x, y, pad) {
+  return OBSTACLES.some(o => x > o.x - pad && x < o.x + o.w + pad && y > o.y - pad && y < o.y + o.h + pad);
+}
 
 const players = new Map(); // id -> {ws,name,color,x,y,angle,hp,kills}
 const powerups = new Map(); // id -> {x,y,type}
@@ -31,7 +40,9 @@ function trySpawnPowerup() {
   if (Math.random() > 0.5) return;
   const id = genId();
   const type = POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)];
-  const x = rand(80, ARENA.w - 80), y = rand(80, ARENA.h - 80);
+  let x, y, tries = 0;
+  do { x = rand(80, ARENA.w - 80); y = rand(80, ARENA.h - 80); tries++; }
+  while (overlapsObstacle(x, y, 20) && tries < 20);
   powerups.set(id, { x, y, type });
   broadcast({ t: 'powerup_spawn', id, x, y, type });
 }
