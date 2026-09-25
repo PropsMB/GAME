@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Arena Shooter</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#141922cc; --text:#eef2f8; --muted:#8b96a8;
+    --accent:#5eead4; --danger:#ff5d6c;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:var(--bg);overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:var(--text)}
+  canvas{display:block;width:100%;height:100%;touch-action:none}
+  #hud{position:fixed;top:12px;left:12px;right:12px;display:flex;justify-content:space-between;pointer-events:none;font-size:13px}
+  #hud .box{background:var(--panel);padding:8px 12px;border-radius:10px;backdrop-filter:blur(6px)}
+  #hp{width:140px;height:10px;background:#222;border-radius:5px;overflow:hidden;margin-top:4px}
+  #hpfill{height:100%;background:var(--accent);width:100%;transition:width .15s}
+  #status{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);
+    background:var(--panel);padding:8px 16px;border-radius:20px;font-size:13px;color:var(--muted);pointer-events:none}
+  #joinbar{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0e14e8;z-index:10}
+  #joinbar .card{background:var(--panel);padding:28px;border-radius:16px;text-align:center;max-width:320px}
+  #joinbar input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a3140;background:#0f1420;color:var(--text);font-size:15px;margin:12px 0}
+  #joinbar button{width:100%;padding:11px;border-radius:8px;border:none;background:var(--accent);color:#0b0e14;font-weight:600;font-size:15px;cursor:pointer}
+  #joinbar button:disabled{opacity:.5;cursor:default}
+  #joinbar h1{font-size:18px;margin:0 0 4px}
+  #joinbar p{color:var(--muted);font-size:13px;margin:0}
+  #deadmsg{position:fixed;top:45%;left:50%;transform:translate(-50%,-50%);font-size:22px;font-weight:700;color:var(--danger);pointer-events:none;display:none}
+  #killfeed{position:fixed;top:56px;right:12px;display:flex;flex-direction:column;gap:4px;align-items:flex-end;pointer-events:none;font-size:12px}
+  #killfeed div{background:#0000009a;padding:4px 10px;border-radius:6px;opacity:0;animation:kf 4s ease forwards}
+  @keyframes kf{0%{opacity:0;transform:translateX(10px)}8%{opacity:1;transform:translateX(0)}80%{opacity:1}100%{opacity:0}}
+  #announce{position:fixed;top:30%;left:50%;transform:translate(-50%,-50%);font-size:30px;font-weight:800;letter-spacing:1px;color:var(--accent);text-shadow:0 2px 12px #000;pointer-events:none;opacity:0}
+  #announce.show{animation:an 1.6s ease forwards}
+  @keyframes an{0%{opacity:0;transform:translate(-50%,-50%) scale(.7)}15%{opacity:1;transform:translate(-50%,-50%) scale(1.08)}30%{transform:translate(-50%,-50%) scale(1)}80%{opacity:1}100%{opacity:0}}
+  #flash{position:fixed;inset:0;pointer-events:none;background:transparent}
+  #hitmarker{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);font-size:26px;color:#fff;opacity:0;pointer-events:none}
+  #hitmarker.show{animation:hm .35s ease forwards}
+  @keyframes hm{0%{opacity:1;transform:translate(-50%,-50%) scale(1.4)}100%{opacity:0;transform:translate(-50%,-50%) scale(.9)}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div class="box">Ty<br><div id="hp"><div id="hpfill"></div></div></div>
+  <div class="box">Zabójstwa: <span id="kills">0</span></div>
+</div>
+<div id="effects" style="position:fixed;left:12px;bottom:50px;display:flex;gap:6px;pointer-events:none"></div>
+<div id="deadmsg">Zginąłeś — odradzasz się...</div>
+<div id="killfeed"></div>
+<div id="announce"></div>
+<div id="hitmarker">✕</div>
+<div id="flash"></div>
+<div id="status">Łączenie z serwerem...</div>
+<div id="joinbar">
+  <div class="card">
+    <h1>Arena Shooter</h1>
+    <p>WASD — ruch, mysz — celowanie, klik — strzał</p>
+    <input id="nameInput" maxlength="14" placeholder="Twoja nazwa">
+    <button id="joinBtn" disabled>Łączenie...</button>
+  </div>
+</div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+function resize(){canvas.width=innerWidth;canvas.height=innerHeight;}
+resize(); addEventListener('resize', resize);
+
+const COLORS = ['#5eead4','#ff5d6c','#facc15','#818cf8','#fb923c','#4ade80','#f472b6','#38bdf8'];
+const ARENA = {w: 2000, h: 1400};
+const POWERUP_TYPES = {
+  heal:   {color:'#4ade80'},
+  speed:  {color:'#facc15'},
+  damage: {color:'#f472b6'}
+};
+const STREAK_NAMES = {2:'PODWÓJNE ZABÓJSTWO', 3:'POTRÓJNE ZABÓJSTWO', 4:'DOMINACJA', 5:'RAMPAGE!'};
+const SHOOT_COOLDOWN = 260, BULLET_SPEED = 640, BULLET_LIFE = 1400, PLAYER_R = 16, BULLET_R = 4, SPEED = 260;
+
+let me = null, peers = {}, bullets = {}, activePowerups = {}, claimed = new Set();
+let keys = {}, mouse = {x:0,y:0}, lastShot = 0, lastPresence = 0, lastSpawnCheck = 0;
+let ws = null, pending = null;
+bullets = []; // {x,y,vx,vy,ownerId,ownerColor,ownerName,born,dmg}
+
+function rand(a,b){return a+Math.random()*(b-a);}
+function myId(){return me ? me.id : null;}
+function spawnPos(){return {x: rand(80, ARENA.w-80), y: rand(80, ARENA.h-80)};}
+
+function connect(){
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(proto + '://' + location.host);
+  const status = document.getElementById('status');
+  const btn = document.getElementById('joinBtn');
+  ws.onopen = () => { status.textContent = 'Połączono. Wpisz nazwę i dołącz.'; btn.disabled = false; btn.textContent = 'Dołącz do areny'; };
+  ws.onclose = () => { status.textContent = 'Rozłączono z serwerem.'; btn.disabled = true; };
+  ws.onerror = () => { status.textContent = 'Błąd połączenia z serwerem.'; };
+  ws.onmessage = (ev) => {
+    let msg; try{ msg = JSON.parse(ev.data); } catch { return; }
+    handleMessage(msg);
+  };
+}
+
+function send(t, data){ if(ws && ws.readyState===1) ws.send(JSON.stringify(Object.assign({t}, data))); }
+
+function handleMessage(msg){
+  if(msg.t === 'welcome' && pending){
+    me = {id: msg.id, name: pending.name, x: pending.x, y: pending.y, angle:0, hp:100,
+          color: pending.color, kills:0, streak:0, speedUntil:0, dmgUntil:0};
+    peers = {};
+    for(const p of msg.players) peers[p.id] = p;
+    activePowerups = {};
+    for(const p of msg.powerups) activePowerups[p.id] = {x:p.x, y:p.y, type:p.type};
+    pending = null;
+    document.getElementById('joinbar').style.display = 'none';
+  } else if(msg.t === 'presence'){
+    peers[msg.id] = msg;
+  } else if(msg.t === 'leave'){
+    delete peers[msg.id];
+  } else if(msg.t === 'shoot'){
+    bullets.push({x:msg.x,y:msg.y,vx:Math.cos(msg.a)*BULLET_SPEED,vy:Math.sin(msg.a)*BULLET_SPEED,
+                  ownerId:msg.id,ownerColor:msg.color,ownerName:msg.name,born:performance.now(),dmg:msg.dmg||20});
+  } else if(msg.t === 'hit'){
+    if(msg.byId === myId()) showHitMarker();
+  } else if(msg.t === 'kill'){
+    addKillFeed((msg.killerName||'???') + ' zeszmacił ' + (msg.victimName||'???'));
+    if(msg.killerId === myId() && me){
+      me.kills++; document.getElementById('kills').textContent = me.kills;
+      me.streak = (me.streak||0) + 1;
+      me.hp = Math.min(100, me.hp + 15);
+      me.dmgUntil = Math.max(me.dmgUntil, performance.now() + 3000);
+      if(STREAK_NAMES[me.streak]) announce(STREAK_NAMES[me.streak]);
+    }
+  } else if(msg.t === 'powerup_spawn'){
+    activePowerups[msg.id] = {x:msg.x, y:msg.y, type:msg.type};
+  } else if(msg.t === 'powerup_remove'){
+    delete activePowerups[msg.id];
+  }
+}
+
+function addKillFeed(text){
+  const el = document.getElementById('killfeed');
+  const row = document.createElement('div');
+  row.textContent = text;
+  el.appendChild(row);
+  setTimeout(()=>row.remove(), 4000);
+  while(el.children.length > 5) el.removeChild(el.firstChild);
+}
+function announce(text){
+  const el = document.getElementById('announce');
+  el.textContent = text;
+  el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
+}
+function flashScreen(color){
+  const el = document.getElementById('flash');
+  el.style.background = color; el.style.transition = 'none';
+  requestAnimationFrame(()=>{ el.style.transition = 'background .4s ease'; el.style.background = 'transparent'; });
+}
+function showHitMarker(){
+  const el = document.getElementById('hitmarker');
+  el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
+}
+function renderEffects(){
+  const el = document.getElementById('effects');
+  if(!el || !me) return;
+  const now = performance.now();
+  let html = '';
+  if(me.speedUntil > now) html += '<div class="box" style="background:var(--panel);padding:6px 10px;border-radius:8px;font-size:12px">⚡ Speed</div>';
+  if(me.dmgUntil > now) html += '<div class="box" style="background:var(--panel);padding:6px 10px;border-radius:8px;font-size:12px">💥 Damage</div>';
+  el.innerHTML = html;
+}
+function applyPowerup(type){
+  const now = performance.now();
+  if(type==='heal') me.hp = Math.min(100, me.hp+40);
+  if(type==='speed') me.speedUntil = now + 5000;
+  if(type==='damage') me.dmgUntil = now + 5000;
+  renderEffects();
+}
+function checkPowerupPickup(){
+  if(!me || me.hp<=0) return;
+  for(const id in activePowerups){
+    if(claimed.has(id)) continue;
+    const p = activePowerups[id];
+    if(Math.hypot(p.x-me.x, p.y-me.y) < PLAYER_R+18){
+      claimed.add(id);
+      send('pickup', {id});
+      applyPowerup(p.type);
+    }
+  }
+}
+
+function init(){
+  document.getElementById('joinBtn').onclick = join;
+  document.getElementById('nameInput').addEventListener('keydown', e=>{if(e.key==='Enter') join();});
+  addEventListener('keydown', e=>keys[e.key.toLowerCase()]=true);
+  addEventListener('keyup', e=>keys[e.key.toLowerCase()]=false);
+  canvas.addEventListener('mousemove', e=>{mouse.x=e.clientX; mouse.y=e.clientY;});
+  canvas.addEventListener('mousedown', shoot);
+  canvas.addEventListener('touchstart', e=>{shoot(); const t=e.touches[0]; if(t){mouse.x=t.clientX; mouse.y=t.clientY;}}, {passive:true});
+  canvas.addEventListener('touchmove', e=>{const t=e.touches[0]; if(t){mouse.x=t.clientX; mouse.y=t.clientY;}}, {passive:true});
+  connect();
+  requestAnimationFrame(loop);
+}
+
+function join(){
+  if(!ws || ws.readyState!==1) return;
+  const name = (document.getElementById('nameInput').value || 'Gracz').slice(0,14);
+  const pos = spawnPos();
+  const color = COLORS[Math.floor(Math.random()*COLORS.length)];
+  pending = {name, color, x:pos.x, y:pos.y};
+  send('join', {name, color, x:pos.x, y:pos.y});
+}
+
+function onDeath(){
+  document.getElementById('deadmsg').style.display='block';
+  setTimeout(()=>{
+    const pos = spawnPos();
+    me.x=pos.x; me.y=pos.y; me.hp=100;
+    document.getElementById('deadmsg').style.display='none';
+  }, 1800);
+}
+
+function shoot(){
+  if(!me || me.hp<=0) return;
+  const now = performance.now();
+  if(now - lastShot < SHOOT_COOLDOWN) return;
+  lastShot = now;
+  const a = me.angle;
+  const dmg = now < me.dmgUntil ? 40 : 20;
+  bullets.push({x:me.x,y:me.y,vx:Math.cos(a)*BULLET_SPEED,vy:Math.sin(a)*BULLET_SPEED,ownerId:me.id,ownerColor:me.color,ownerName:me.name,born:now,dmg});
+  send('shoot', {x:me.x, y:me.y, a, dmg});
+}
+
+function loop(t){
+  const dt = Math.min(0.05, (loop.last ? (t-loop.last)/1000 : 0.016));
+  loop.last = t;
+
+  if(me && me.hp>0){
+    let dx=0, dy=0;
+    if(keys['w']) dy-=1; if(keys['s']) dy+=1;
+    if(keys['a']) dx-=1; if(keys['d']) dx+=1;
+    const spd = SPEED * (t < me.speedUntil ? 1.6 : 1);
+    if(dx||dy){ const l=Math.hypot(dx,dy); me.x+=dx/l*spd*dt; me.y+=dy/l*spd*dt; }
+    me.x = Math.max(PLAYER_R, Math.min(ARENA.w-PLAYER_R, me.x));
+    me.y = Math.max(PLAYER_R, Math.min(ARENA.h-PLAYER_R, me.y));
+    const camX = me.x - canvas.width/2, camY = me.y - canvas.height/2;
+    me.angle = Math.atan2((mouse.y+camY)-me.y, (mouse.x+camX)-me.x);
+
+    if(t - lastPresence > 60){
+      lastPresence = t;
+      send('presence', {x:me.x, y:me.y, angle:me.angle, hp:me.hp, kills:me.kills});
+    }
+    checkPowerupPickup();
+    renderEffects();
+  }
+
+  bullets = bullets.filter(b => t - b.born < BULLET_LIFE);
+  for(const b of bullets){
+    b.x += b.vx*dt; b.y += b.vy*dt;
+    if(me && me.hp>0 && b.ownerId!==me.id){
+      const d = Math.hypot(b.x-me.x, b.y-me.y);
+      if(d < PLAYER_R+BULLET_R){
+        b.born = -99999;
+        me.hp = Math.max(0, me.hp-(b.dmg||20));
+        flashScreen('#ff5d6c33');
+        send('hit', {targetId: me.id, byId: b.ownerId});
+        if(me.hp<=0){
+          me.streak = 0;
+          send('kill', {killerId: b.ownerId, victimId: me.id, killerName: b.ownerName, victimName: me.name});
+          onDeath();
+        }
+      }
+    }
+  }
+  bullets = bullets.filter(b => b.born !== -99999);
+
+  document.getElementById('hpfill').style.width = (me?Math.max(0,me.hp):100)+'%';
+  render();
+  requestAnimationFrame(loop);
+}
+
+function drawPlayer(p, isMe){
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate(p.angle||0);
+  ctx.beginPath();
+  ctx.moveTo(PLAYER_R+8,0); ctx.lineTo(PLAYER_R-2,-5); ctx.lineTo(PLAYER_R-2,5); ctx.closePath();
+  ctx.fillStyle = p.color; ctx.fill();
+  ctx.restore();
+  ctx.beginPath();
+  ctx.arc(p.x,p.y,PLAYER_R,0,7);
+  ctx.fillStyle = p.color; ctx.fill();
+  ctx.lineWidth=2; ctx.strokeStyle = isMe? '#fff':'#00000055'; ctx.stroke();
+  const hp = p.hp==null?100:p.hp;
+  ctx.fillStyle='#000a'; ctx.fillRect(p.x-18,p.y-PLAYER_R-14,36,5);
+  ctx.fillStyle= hp>40? '#4ade80':'#ff5d6c'; ctx.fillRect(p.x-18,p.y-PLAYER_R-14,36*hp/100,5);
+  ctx.fillStyle='#dfe6f0'; ctx.font='12px sans-serif'; ctx.textAlign='center';
+  ctx.fillText(p.name||'', p.x, p.y-PLAYER_R-18);
+}
+
+function render(){
+  ctx.fillStyle = '#0b0e14';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  if(!me){ return; }
+  const camX = me.x - canvas.width/2, camY = me.y - canvas.height/2;
+  ctx.save();
+  ctx.translate(-camX,-camY);
+
+  ctx.strokeStyle = '#161b26'; ctx.lineWidth=1;
+  const gs=60;
+  for(let x = Math.floor(camX/gs)*gs; x<camX+canvas.width; x+=gs){ ctx.beginPath(); ctx.moveTo(x,camY); ctx.lineTo(x,camY+canvas.height); ctx.stroke(); }
+  for(let y = Math.floor(camY/gs)*gs; y<camY+canvas.height; y+=gs){ ctx.beginPath(); ctx.moveTo(camX,y); ctx.lineTo(camX+canvas.width,y); ctx.stroke(); }
+
+  ctx.strokeStyle = '#2a3140'; ctx.lineWidth=4;
+  ctx.strokeRect(0,0,ARENA.w,ARENA.h);
+
+  for(const b of bullets){
+    ctx.beginPath(); ctx.arc(b.x,b.y,BULLET_R,0,7);
+    ctx.fillStyle = b.ownerColor || '#fff'; ctx.fill();
+  }
+
+  for(const id in activePowerups){
+    const p = activePowerups[id];
+    const meta = POWERUP_TYPES[p.type] || POWERUP_TYPES.heal;
+    ctx.save();
+    ctx.translate(p.x,p.y);
+    ctx.rotate(performance.now()/500);
+    ctx.fillStyle = meta.color;
+    ctx.beginPath();
+    ctx.moveTo(0,-14); ctx.lineTo(14,0); ctx.lineTo(0,14); ctx.lineTo(-14,0); ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  for(const id in peers){
+    const p = peers[id];
+    if(p.hp>0) drawPlayer(p,false);
+  }
+  if(me.hp>0) drawPlayer(me,true);
+
+  ctx.restore();
+}
+
+init();
+</script>
+</body>
+</html>
