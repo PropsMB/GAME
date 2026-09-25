@@ -47,6 +47,11 @@
 </head>
 <body>
 <canvas id="c"></canvas>
+<div id="musicControl" style="position:fixed;top:64px;left:12px;z-index:5;pointer-events:auto">
+  <button id="musicBtn" style="background:#141922cc;color:#eef2f8;border:1px solid #2a3140;padding:7px 10px;border-radius:9px;cursor:pointer;font-size:12px">
+    🔊 Muzyka: ON
+  </button>
+</div>
 <div id="hud">
   <div class="box">Ty<br><div id="hp"><div id="hpfill"></div></div></div>
   <div class="box">Zabójstwa: <span id="kills">0</span></div>
@@ -127,6 +132,30 @@ function spawnPos(){
     if(!OBSTACLES.some(o=>circleRectCollide(x,y,PLAYER_R+10,o))) return {x,y};
   }
   return {x: rand(80, ARENA.w-80), y: rand(80, ARENA.h-80)};
+}
+
+
+// --- muzyka ---
+const music = new Audio('/music/arena-theme.mp3');
+music.loop = true;
+music.volume = 0.35;
+let musicEnabled = true;
+
+function startMusic(){
+  if(!musicEnabled) return;
+  music.play().catch(()=>{});
+}
+
+function toggleMusic(){
+  musicEnabled = !musicEnabled;
+  const btn = document.getElementById('musicBtn');
+  if(musicEnabled){
+    startMusic();
+    btn.textContent = '🔊 Muzyka: ON';
+  } else {
+    music.pause();
+    btn.textContent = '🔇 Muzyka: OFF';
+  }
 }
 
 function connect(){
@@ -242,6 +271,9 @@ function checkPowerupPickup(){
   }
 }
 
+
+document.getElementById('musicBtn').onclick = toggleMusic;
+
 function init(){
   document.getElementById('joinBtn').onclick = join;
   document.getElementById('nameInput').addEventListener('keydown', e=>{if(e.key==='Enter') join();});
@@ -264,6 +296,7 @@ function init(){
 }
 
 function join(){
+  startMusic();
   if(!ws || ws.readyState!==1) return;
   const name = (document.getElementById('nameInput').value || 'Gracz').slice(0,14);
   const pos = spawnPos();
