@@ -47,10 +47,11 @@
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="musicControl" style="position:fixed;top:64px;left:12px;z-index:5;pointer-events:auto">
-  <button id="musicBtn" style="background:#141922cc;color:#eef2f8;border:1px solid #2a3140;padding:7px 10px;border-radius:9px;cursor:pointer;font-size:12px">
-    🔊 Muzyka: ON
-  </button>
+<div id="musicControl" style="position:fixed;top:64px;left:12px;z-index:5;pointer-events:auto;display:flex;gap:5px;align-items:center;background:#141922cc;padding:6px;border:1px solid #2a3140;border-radius:10px">
+  <button id="prevMusic" title="Poprzednia" style="background:#141922;color:#eef2f8;border:1px solid #2a3140;padding:5px 8px;border-radius:7px;cursor:pointer">⏮</button>
+  <button id="musicBtn" style="background:#141922;color:#eef2f8;border:1px solid #2a3140;padding:5px 9px;border-radius:7px;cursor:pointer;font-size:12px">🔊 ON</button>
+  <button id="nextMusic" title="Następna" style="background:#141922;color:#eef2f8;border:1px solid #2a3140;padding:5px 8px;border-radius:7px;cursor:pointer">⏭</button>
+  <span id="trackName" style="color:#eef2f8;font:12px Arial,sans-serif;min-width:70px;text-align:center">Utwór 1/5</span>
 </div>
 <div id="hud">
   <div class="box">Ty<br><div id="hp"><div id="hpfill"></div></div></div>
@@ -135,28 +136,61 @@ function spawnPos(){
 }
 
 
-// --- muzyka ---
-const music = new Audio('/music/arena-theme.mp3');
-music.loop = true;
+// --- muzyka / PLAYLISTA ---
+const playlist = [
+  '/music/song1.mp3',
+  '/music/song2.mp3',
+  '/music/song3.mp3',
+  '/music/song4.mp3',
+  '/music/song5.mp3'
+];
+
+const music = new Audio();
 music.volume = 0.35;
-let musicEnabled = true;
+musicEnabled = true;
+let currentTrack = 0;
+
+function setTrack(index, autoplay=true){
+  if(!playlist.length) return;
+  currentTrack = (index + playlist.length) % playlist.length;
+  music.src = playlist[currentTrack];
+  music.load();
+  updateMusicLabel();
+  if(autoplay && musicEnabled) music.play().catch(()=>{});
+}
 
 function startMusic(){
-  if(!musicEnabled) return;
+  if(!musicEnabled || !playlist.length) return;
+  if(!music.src) setTrack(currentTrack, false);
   music.play().catch(()=>{});
+}
+
+function nextTrack(){
+  setTrack(currentTrack + 1);
+}
+
+function previousTrack(){
+  setTrack(currentTrack - 1);
 }
 
 function toggleMusic(){
   musicEnabled = !musicEnabled;
   const btn = document.getElementById('musicBtn');
   if(musicEnabled){
-    startMusic();
     btn.textContent = '🔊 Muzyka: ON';
+    startMusic();
   } else {
     music.pause();
     btn.textContent = '🔇 Muzyka: OFF';
   }
 }
+
+function updateMusicLabel(){
+  const label = document.getElementById('trackName');
+  if(label) label.textContent = `Utwór ${currentTrack + 1}/${playlist.length}`;
+}
+
+music.addEventListener('ended', nextTrack);
 
 function connect(){
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -273,6 +307,9 @@ function checkPowerupPickup(){
 
 
 document.getElementById('musicBtn').onclick = toggleMusic;
+document.getElementById('prevMusic').onclick = previousTrack;
+document.getElementById('nextMusic').onclick = nextTrack;
+setTrack(0, false);
 
 function init(){
   document.getElementById('joinBtn').onclick = join;
