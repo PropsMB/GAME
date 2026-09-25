@@ -19,7 +19,11 @@
   #status{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);
     background:var(--panel);padding:8px 16px;border-radius:20px;font-size:13px;color:var(--muted);pointer-events:none}
   #joinbar{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0e14e8;z-index:10}
-  #joinbar .card{background:var(--panel);padding:28px;border-radius:16px;text-align:center;max-width:320px}
+  #joinbar .card{background:var(--panel);padding:28px;border-radius:16px;text-align:center;max-width:340px}
+  #skinGrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:14px 0}
+  .skinBtn{background:#0f1420;border:2px solid #2a3140;border-radius:10px;padding:8px 0;cursor:pointer;font-size:22px;color:var(--text)}
+  .skinBtn.selected{border-color:var(--accent);background:#5eead422}
+  .skinBtn small{display:block;font-size:9px;color:var(--muted);margin-top:2px}
   #joinbar input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid #2a3140;background:#0f1420;color:var(--text);font-size:15px;margin:12px 0}
   #joinbar button{width:100%;padding:11px;border-radius:8px;border:none;background:var(--accent);color:#0b0e14;font-weight:600;font-size:15px;cursor:pointer}
   #joinbar button:disabled{opacity:.5;cursor:default}
@@ -43,16 +47,14 @@
   #scoreboard .row.me{background:#5eead422}
   #scoreboard .row span:first-child{color:var(--text)}
   #scoreboard .row span:last-child{color:var(--accent);font-weight:700}
+  #topkills{position:fixed;top:76px;left:12px;background:var(--panel);padding:8px 12px;border-radius:10px;font-size:11px;pointer-events:none;max-width:170px}
+  #topkills h3{margin:0 0 4px;font-size:10px;color:var(--muted);letter-spacing:.5px;text-transform:uppercase}
+  #topkills div{display:flex;justify-content:space-between;gap:8px}
+  #invuln{filter:brightness(1.6)}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="musicControl" style="position:fixed;top:64px;left:12px;z-index:5;pointer-events:auto;display:flex;gap:5px;align-items:center;background:#141922cc;padding:6px;border:1px solid #2a3140;border-radius:10px">
-  <button id="prevMusic" title="Poprzednia" style="background:#141922;color:#eef2f8;border:1px solid #2a3140;padding:5px 8px;border-radius:7px;cursor:pointer">⏮</button>
-  <button id="musicBtn" style="background:#141922;color:#eef2f8;border:1px solid #2a3140;padding:5px 9px;border-radius:7px;cursor:pointer;font-size:12px">🔊 ON</button>
-  <button id="nextMusic" title="Następna" style="background:#141922;color:#eef2f8;border:1px solid #2a3140;padding:5px 8px;border-radius:7px;cursor:pointer">⏭</button>
-  <span id="trackName" style="color:#eef2f8;font:12px Arial,sans-serif;min-width:70px;text-align:center">Utwór 1/5</span>
-</div>
 <div id="hud">
   <div class="box">Ty<br><div id="hp"><div id="hpfill"></div></div></div>
   <div class="box">Zabójstwa: <span id="kills">0</span></div>
@@ -64,12 +66,14 @@
 <div id="hitmarker">✕</div>
 <div id="flash"></div>
 <div id="scoreboard"><h2>WYNIKI (Tab)</h2></div>
+<div id="topkills"><h3>Top zabójcy (globalnie)</h3></div>
 <div id="status">Łączenie z serwerem...</div>
 <div id="joinbar">
   <div class="card">
     <h1>Arena Shooter</h1>
     <p>WASD — ruch, mysz — celowanie, klik — strzał</p>
     <input id="nameInput" maxlength="14" placeholder="Twoja nazwa">
+    <div id="skinGrid"></div>
     <button id="joinBtn" disabled>Łączenie...</button>
   </div>
 </div>
@@ -79,7 +83,17 @@ const ctx = canvas.getContext('2d');
 function resize(){canvas.width=innerWidth;canvas.height=innerHeight;}
 resize(); addEventListener('resize', resize);
 
-const COLORS = ['#5eead4','#ff5d6c','#facc15','#818cf8','#fb923c','#4ade80','#f472b6','#38bdf8'];
+const SKINS = [
+  {id:'aqua',   name:'Ninja',  color:'#5eead4', emoji:'🥷'},
+  {id:'robot',  name:'Robot',  color:'#38bdf8', emoji:'🤖'},
+  {id:'alien',  name:'Obcy',   color:'#4ade80', emoji:'👽'},
+  {id:'wizard', name:'Mag',    color:'#818cf8', emoji:'🧙'},
+  {id:'ghost',  name:'Duch',   color:'#e5e7eb', emoji:'👻'},
+  {id:'fire',   name:'Ogień',  color:'#fb923c', emoji:'🔥'},
+  {id:'ice',    name:'Lód',    color:'#22d3ee', emoji:'❄️'},
+  {id:'skull',  name:'Czacha', color:'#f87171', emoji:'💀'}
+];
+function skinById(id){ return SKINS.find(s=>s.id===id) || SKINS[0]; }
 const ARENA = {w: 2000, h: 1400};
 const POWERUP_TYPES = {
   heal:   {color:'#4ade80', icon:'➕'},
@@ -92,6 +106,19 @@ const SHOOT_COOLDOWN = 260, BULLET_SPEED = 640, BULLET_LIFE = 1400, PLAYER_R = 1
 let me = null, peers = {}, bullets = {}, activePowerups = {}, claimed = new Set();
 let keys = {}, mouse = {x:0,y:0}, lastShot = 0, lastPresence = 0, lastSpawnCheck = 0;
 let ws = null, pending = null, firing = false, showScore = false;
+let selectedSkin = SKINS[0].id, globalTop = [];
+let actx = null;
+function beep(freq, dur, type, vol){
+  try{
+    if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)();
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.type = type; o.frequency.value = freq; g.gain.value = vol;
+    o.connect(g); g.connect(actx.destination);
+    o.start();
+    g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur);
+    o.stop(actx.currentTime + dur);
+  }catch(e){}
+}
 bullets = []; // {x,y,vx,vy,ownerId,ownerColor,ownerName,born,dmg}
 
 // --- obstacles (same on every client, no sync needed) ---
@@ -135,63 +162,6 @@ function spawnPos(){
   return {x: rand(80, ARENA.w-80), y: rand(80, ARENA.h-80)};
 }
 
-
-// --- muzyka / PLAYLISTA ---
-const playlist = [
-  '/music/song1.mp3',
-  '/music/song2.mp3',
-  '/music/song3.mp3',
-  '/music/song4.mp3',
-  '/music/song5.mp3'
-];
-
-const music = new Audio();
-music.volume = 0.35;
-musicEnabled = true;
-let currentTrack = 0;
-
-function setTrack(index, autoplay=true){
-  if(!playlist.length) return;
-  currentTrack = (index + playlist.length) % playlist.length;
-  music.src = playlist[currentTrack];
-  music.load();
-  updateMusicLabel();
-  if(autoplay && musicEnabled) music.play().catch(()=>{});
-}
-
-function startMusic(){
-  if(!musicEnabled || !playlist.length) return;
-  if(!music.src) setTrack(currentTrack, false);
-  music.play().catch(()=>{});
-}
-
-function nextTrack(){
-  setTrack(currentTrack + 1);
-}
-
-function previousTrack(){
-  setTrack(currentTrack - 1);
-}
-
-function toggleMusic(){
-  musicEnabled = !musicEnabled;
-  const btn = document.getElementById('musicBtn');
-  if(musicEnabled){
-    btn.textContent = '🔊 Muzyka: ON';
-    startMusic();
-  } else {
-    music.pause();
-    btn.textContent = '🔇 Muzyka: OFF';
-  }
-}
-
-function updateMusicLabel(){
-  const label = document.getElementById('trackName');
-  if(label) label.textContent = `Utwór ${currentTrack + 1}/${playlist.length}`;
-}
-
-music.addEventListener('ended', nextTrack);
-
 function connect(){
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(proto + '://' + location.host);
@@ -211,11 +181,14 @@ function send(t, data){ if(ws && ws.readyState===1) ws.send(JSON.stringify(Objec
 function handleMessage(msg){
   if(msg.t === 'welcome' && pending){
     me = {id: msg.id, name: pending.name, x: pending.x, y: pending.y, angle:0, hp:100,
-          color: pending.color, kills:0, streak:0, speedUntil:0, dmgUntil:0};
+          color: pending.color, skin: pending.skin, kills:0, streak:0, speedUntil:0, dmgUntil:0,
+          invulnUntil: performance.now() + 1500};
     peers = {};
     for(const p of msg.players) peers[p.id] = p;
     activePowerups = {};
     for(const p of msg.powerups) activePowerups[p.id] = {x:p.x, y:p.y, type:p.type};
+    globalTop = msg.leaderboard || [];
+    renderTopKills();
     pending = null;
     document.getElementById('joinbar').style.display = 'none';
   } else if(msg.t === 'presence'){
@@ -226,7 +199,7 @@ function handleMessage(msg){
     bullets.push({x:msg.x,y:msg.y,vx:Math.cos(msg.a)*BULLET_SPEED,vy:Math.sin(msg.a)*BULLET_SPEED,
                   ownerId:msg.id,ownerColor:msg.color,ownerName:msg.name,born:performance.now(),dmg:msg.dmg||20});
   } else if(msg.t === 'hit'){
-    if(msg.byId === myId()) showHitMarker();
+    if(msg.byId === myId()) { showHitMarker(); beep(500,0.05,'square',0.06); }
   } else if(msg.t === 'kill'){
     addKillFeed((msg.killerName||'???') + ' zeszmacił ' + (msg.victimName||'???'));
     if(msg.killerId === myId() && me){
@@ -234,8 +207,12 @@ function handleMessage(msg){
       me.streak = (me.streak||0) + 1;
       me.hp = Math.min(100, me.hp + 15);
       me.dmgUntil = Math.max(me.dmgUntil, performance.now() + 3000);
+      beep(660,0.15,'square',0.12);
       if(STREAK_NAMES[me.streak]) announce(STREAK_NAMES[me.streak]);
     }
+  } else if(msg.t === 'leaderboard'){
+    globalTop = msg.list || [];
+    renderTopKills();
   } else if(msg.t === 'powerup_spawn'){
     activePowerups[msg.id] = {x:msg.x, y:msg.y, type:msg.type};
   } else if(msg.t === 'powerup_remove'){
@@ -305,13 +282,30 @@ function checkPowerupPickup(){
   }
 }
 
+function renderTopKills(){
+  const el = document.getElementById('topkills');
+  if(!globalTop.length){ el.innerHTML = '<h3>Top zabójcy (globalnie)</h3><div style="color:var(--muted)">brak danych</div>'; return; }
+  el.innerHTML = '<h3>Top zabójcy (globalnie)</h3>' + globalTop.slice(0,5).map((p,i)=>
+    `<div><span>${i+1}. ${p.name}</span><span style="color:var(--accent)">${p.kills}</span></div>`
+  ).join('');
+}
 
-document.getElementById('musicBtn').onclick = toggleMusic;
-document.getElementById('prevMusic').onclick = previousTrack;
-document.getElementById('nextMusic').onclick = nextTrack;
-setTrack(0, false);
+function buildSkinGrid(){
+  const el = document.getElementById('skinGrid');
+  el.innerHTML = SKINS.map(s =>
+    `<button type="button" class="skinBtn${s.id===selectedSkin?' selected':''}" data-skin="${s.id}">${s.emoji}<small>${s.name}</small></button>`
+  ).join('');
+  el.querySelectorAll('.skinBtn').forEach(btn=>{
+    btn.onclick = () => {
+      selectedSkin = btn.dataset.skin;
+      el.querySelectorAll('.skinBtn').forEach(b=>b.classList.remove('selected'));
+      btn.classList.add('selected');
+    };
+  });
+}
 
 function init(){
+  buildSkinGrid();
   document.getElementById('joinBtn').onclick = join;
   document.getElementById('nameInput').addEventListener('keydown', e=>{if(e.key==='Enter') join();});
   addEventListener('keydown', e=>{
@@ -333,20 +327,21 @@ function init(){
 }
 
 function join(){
-  startMusic();
   if(!ws || ws.readyState!==1) return;
   const name = (document.getElementById('nameInput').value || 'Gracz').slice(0,14);
   const pos = spawnPos();
-  const color = COLORS[Math.floor(Math.random()*COLORS.length)];
-  pending = {name, color, x:pos.x, y:pos.y};
-  send('join', {name, color, x:pos.x, y:pos.y});
+  const skin = skinById(selectedSkin);
+  pending = {name, color:skin.color, skin:skin.id, x:pos.x, y:pos.y};
+  send('join', {name, color:skin.color, skin:skin.id, x:pos.x, y:pos.y});
 }
 
 function onDeath(){
   document.getElementById('deadmsg').style.display='block';
+  beep(140,0.3,'sawtooth',0.15);
   setTimeout(()=>{
     const pos = spawnPos();
     me.x=pos.x; me.y=pos.y; me.hp=100;
+    me.invulnUntil = performance.now() + 1500;
     document.getElementById('deadmsg').style.display='none';
   }, 1800);
 }
@@ -360,6 +355,7 @@ function shoot(){
   const dmg = now < me.dmgUntil ? 40 : 20;
   bullets.push({x:me.x,y:me.y,vx:Math.cos(a)*BULLET_SPEED,vy:Math.sin(a)*BULLET_SPEED,ownerId:me.id,ownerColor:me.color,ownerName:me.name,born:now,dmg});
   send('shoot', {x:me.x, y:me.y, a, dmg});
+  beep(880,0.04,'square',0.05);
 }
 
 function loop(t){
@@ -401,7 +397,7 @@ function loop(t){
       b.born = -99999;
       continue;
     }
-    if(me && me.hp>0 && b.ownerId!==me.id){
+    if(me && me.hp>0 && b.ownerId!==me.id && performance.now()>=me.invulnUntil){
       if(segmentHitsCircle(px, py, b.x, b.y, me.x, me.y, PLAYER_R+BULLET_R)){
         b.born = -99999;
         me.hp = Math.max(0, me.hp-(b.dmg||20));
@@ -423,6 +419,8 @@ function loop(t){
 }
 
 function drawPlayer(p, isMe){
+  const invuln = isMe && me.invulnUntil > performance.now();
+  if(invuln && Math.floor(performance.now()/150)%2===0) return; // flicker while invulnerable
   ctx.beginPath();
   ctx.ellipse(p.x, p.y+PLAYER_R*0.7, PLAYER_R*0.9, PLAYER_R*0.35, 0, 0, 7);
   ctx.fillStyle = 'rgba(0,0,0,.35)';
@@ -438,6 +436,9 @@ function drawPlayer(p, isMe){
   ctx.arc(p.x,p.y,PLAYER_R,0,7);
   ctx.fillStyle = p.color; ctx.fill();
   ctx.lineWidth=2; ctx.strokeStyle = isMe? '#fff':'#00000055'; ctx.stroke();
+  const emoji = skinById(p.skin).emoji;
+  ctx.font = '16px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(emoji, p.x, p.y+1);
   const hp = p.hp==null?100:p.hp;
   ctx.fillStyle='#000a'; ctx.fillRect(p.x-18,p.y-PLAYER_R-14,36,5);
   ctx.fillStyle= hp>40? '#4ade80':'#ff5d6c'; ctx.fillRect(p.x-18,p.y-PLAYER_R-14,36*hp/100,5);

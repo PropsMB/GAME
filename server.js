@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const fs = require('fs');
 const { WebSocketServer } = require('ws');
 
 const app = express();
@@ -8,6 +9,15 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
+
+// --- persistent all-time leaderboard (survives restarts, resets on redeploy) ---
+const LB_FILE = path.join(__dirname, 'leaderboard.json');
+let leaderboard = {};
+try { leaderboard = JSON.parse(fs.readFileSync(LB_FILE, 'utf8')); } catch { leaderboard = {}; }
+function saveLeaderboard() { fs.writeFile(LB_FILE, JSON.stringify(leaderboard), () => {}); }
+function topList() {
+  return Object.entries(leaderboard).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, kills]) => ({ name, kills }));
+}
 
 const ARENA = { w: 2000, h: 1400 };
 const POWERUP_TYPES = ['heal', 'speed', 'damage'];
@@ -59,13 +69,15 @@ wss.on('connection', (ws) => {
       id = genId();
       players.set(id, {
         ws, name: String(msg.name || 'Gracz').slice(0, 14), color: msg.color || '#5eead4',
+        skin: String(msg.skin || 'aqua').slice(0, 20),
         x: msg.x || ARENA.w / 2, y: msg.y || ARENA.h / 2, angle: 0, hp: 100, kills: 0
       });
       ws.send(JSON.stringify({
         t: 'welcome', id,
         players: [...players.entries()].filter(([pid]) => pid !== id)
-          .map(([pid, p]) => ({ id: pid, name: p.name, color: p.color, x: p.x, y: p.y, angle: p.angle, hp: p.hp, kills: p.kills })),
-        powerups: [...powerups.entries()].map(([pid, p]) => ({ id: pid, ...p }))
+          .map(([pid, p]) => ({ id: pid, name: p.name, color: p.color, skin: p.skin, x: p.x, y: p.y, angle: p.angle, hp: p.hp, kills: p.kills })),
+        powerups: [...powerups.entries()].map(([pid, p]) => ({ id: pid, ...p })),
+        leaderboard: topList()
       }));
       return;
     }
@@ -74,13 +86,18 @@ wss.on('connection', (ws) => {
 
     if (msg.t === 'presence') {
       me.x = msg.x; me.y = msg.y; me.angle = msg.angle; me.hp = msg.hp; me.kills = msg.kills;
-      broadcast({ t: 'presence', id, x: me.x, y: me.y, angle: me.angle, hp: me.hp, color: me.color, name: me.name, kills: me.kills }, id);
+      broadcast({ t: 'presence', id, x: me.x, y: me.y, angle: me.angle, hp: me.hp, color: me.color, skin: me.skin, name: me.name, kills: me.kills }, id);
     } else if (msg.t === 'shoot') {
       broadcast({ t: 'shoot', id, x: msg.x, y: msg.y, a: msg.a, color: me.color, dmg: msg.dmg, name: me.name }, id);
     } else if (msg.t === 'hit') {
       broadcast({ t: 'hit', targetId: msg.targetId, byId: msg.byId }, id);
     } else if (msg.t === 'kill') {
       broadcast({ t: 'kill', killerId: msg.killerId, victimId: msg.victimId, killerName: msg.killerName, victimName: msg.victimName });
+      if (msg.killerName) {
+        leaderboard[msg.killerName] = (leaderboard[msg.killerName] || 0) + 1;
+        saveLeaderboard();
+        broadcast({ t: 'leaderboard', list: topList() });
+      }
     } else if (msg.t === 'pickup') {
       if (powerups.has(msg.id)) {
         powerups.delete(msg.id);
